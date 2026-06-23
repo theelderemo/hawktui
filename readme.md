@@ -24,6 +24,17 @@ And more settings than you can shake a... well, you get the idea.
 
 It is fast. It is automated. And it swallows.
 
+<table align="center">
+  <tr>
+    <td><img src="assets/1.png" alt="HawkTUI screenshot 1" width="400"/></td>
+    <td><img src="assets/2.png" alt="HawkTUI screenshot 2" width="400"/></td>
+  </tr>
+  <tr>
+    <td><img src="assets/3.png" alt="HawkTUI screenshot 3" width="400"/></td>
+    <td><img src="assets/4.png" alt="HawkTUI screenshot 4" width="400"/></td>
+  </tr>
+</table>
+
 Most yt-dlp wrappers are either boring terminal scripts or bloated GUI.  
 HawkTUI is the one that actually **spits on that thang**.
 
