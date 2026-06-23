@@ -2,6 +2,7 @@
 
 <div align="center">
   <img src="assets/hawktui.svg" alt="hawktui" width="240"/>
+</div>
 
 Are you tired of dry, raw, friction-heavy command line interfaces?
 
