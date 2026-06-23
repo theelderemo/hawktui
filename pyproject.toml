@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hawktui"
+dynamic = ["version"]
+description = "Hawk tuah on that clipboard and spit straight to disk"
+readme = "readme.md"
+license = {text = "MIT"}
+requires-python = ">=3.12"
+authors = [
+    {name = "Christopher Dickinson"}
+]
+dependencies = [
+    "textual",
+    "pyperclip",
+]
+
+[project.scripts]
+hawktui = "hawktui:main"
+
+[project.urls]
+Homepage = "https://github.com/theelderemo/hawktui"
+Repository = "https://github.com/theelderemo/hawktui"
+
+[tool.hatch.version]
+path = "hawktui/hawktui.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hawktui"]

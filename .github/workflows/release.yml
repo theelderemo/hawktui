@@ -1,0 +1,98 @@
+name: Release
+
+# Fires when the Makefile release targets push a v* tag (e.g. v0.1.0).
+on:
+  push:
+    tags:
+      - "v*"
+  # Lets you re-run a build by hand against any tag without re-tagging.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write  # needed to create/update the GitHub Release
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: hawktui-linux-x86_64
+            binary: hawktui
+          - os: macos-13            # Intel runner
+            asset: hawktui-macos-x86_64
+            binary: hawktui
+          - os: macos-latest        # Apple Silicon runner
+            asset: hawktui-macos-arm64
+            binary: hawktui
+          - os: windows-latest
+            asset: hawktui-windows-x86_64.exe
+            binary: hawktui.exe
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip wheel
+          python -m pip install pyinstaller textual pyperclip
+
+      - name: Build standalone binary
+        run: >
+          python -m PyInstaller
+          --onefile
+          --name hawktui
+          --clean
+          --noconfirm
+          hawktui/hawktui.py
+
+      - name: Rename binary to asset name
+        shell: bash
+        run: mv "dist/${{ matrix.binary }}" "dist/${{ matrix.asset }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all built binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: artifacts/*
+          generate_release_notes: true
+          body: |
+            ## HawkTUI ${{ github.event.inputs.tag || github.ref_name }}
+
+            Prebuilt standalone binaries are attached below. Pick the one for your platform,
+            make it executable (`chmod +x hawktui-*` on macOS/Linux), and run it.
+
+            > **Heads up — these binaries do NOT bundle yt-dlp or ffmpeg.**
+            > Those are still required at runtime. On Linux you also need `xclip` or `xsel`
+            > for clipboard watching. See the README for setup.
