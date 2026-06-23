@@ -26,12 +26,6 @@ jobs:
           - os: ubuntu-latest
             asset: hawktui-linux-x86_64
             binary: hawktui
-          - os: macos-13            # Intel runner
-            asset: hawktui-macos-x86_64
-            binary: hawktui
-          - os: macos-latest        # Apple Silicon runner
-            asset: hawktui-macos-arm64
-            binary: hawktui
           - os: windows-latest
             asset: hawktui-windows-x86_64.exe
             binary: hawktui.exe
@@ -90,8 +84,13 @@ jobs:
           body: |
             ## HawkTUI ${{ github.event.inputs.tag || github.ref_name }}
 
-            Prebuilt standalone binaries are attached below. Pick the one for your platform,
-            make it executable (`chmod +x hawktui-*` on macOS/Linux), and run it.
+            Prebuilt standalone binaries for **Linux (x86_64)** and **Windows (x86_64)** are
+            attached below. Pick the one for your platform, make it executable
+            (`chmod +x hawktui-*` on Linux), and run it.
+
+            > **macOS users:** there's no prebuilt binary — build from source instead.
+            > It takes about a minute: `git clone` the repo and run `python3 hawktui/build.py`,
+            > which packages a standalone `hawktui` into `~/.local/bin`. See the README for details.
 
             > **Heads up — these binaries do NOT bundle yt-dlp or ffmpeg.**
             > Those are still required at runtime. On Linux you also need `xclip` or `xsel`

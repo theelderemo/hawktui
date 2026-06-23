@@ -1,4 +1,5 @@
-# HawkTUI
+# HawkTUI  
+[![Release](https://github.com/theelderemo/hawktui/actions/workflows/release.yml/badge.svg)](https://github.com/theelderemo/hawktui/actions/workflows/release.yml)
 
 <div align="center">
   <img src="assets/hawktui.svg" alt="hawktui" width="240"/>
@@ -82,23 +83,34 @@ It spins up its own throwaway virtual environment, grabs the latest of everythin
 
 ### Don't want to build it yourself?
 
-Prebuilt binaries are attached to every [release](https://github.com/theelderemo/hawktui/releases). Grab the one for your platform:
+Prebuilt binaries for Linux and Windows are attached to every [release](https://github.com/theelderemo/hawktui/releases). Grab the one for your platform:
 
 | Platform | Asset |
 | :--- | :--- |
 | Linux (x86_64) | `hawktui-linux-x86_64` |
-| macOS (Intel) | `hawktui-macos-x86_64` |
-| macOS (Apple Silicon) | `hawktui-macos-arm64` |
 | Windows (x86_64) | `hawktui-windows-x86_64.exe` |
 
-On macOS/Linux, make it executable and run it:
+On Linux, make it executable and run it:
 
 ```bash
 chmod +x hawktui-*
 ./hawktui-*
 ```
 - **These binaries don't bundle yt-dlp or ffmpeg.** They're still required at runtime. See the install steps above. On Linux you also need `xclip` or `xsel` for clipboard watching.
-- **The binaries are unsigned.** macOS Gatekeeper will whine about an "unidentified developer" (right-click, open the first time, or run `xattr -d com.apple.quarantine hawktui-*`), and Windows SmartScreen may flag it (More info - Run anyway). Signing costs money; this does not.
+- **The binaries are unsigned.** Windows SmartScreen may flag it (More info - Run anyway). Signing costs money; this does not.
+
+### macOS users
+
+There's no prebuilt macOS binary — build your own from source, it only takes a minute. Clone the repo (see [Installation](#installation) above), then run:
+
+```bash
+cd hawktui
+python3 hawktui/build.py
+```
+
+This spins up a throwaway virtual environment, builds a standalone `hawktui` with PyInstaller, and drops it into `~/.local/bin` so you can call `hawktui` from anywhere. If `~/.local/bin` isn't on your `PATH`, the script tells you exactly what to add. macOS Gatekeeper won't complain since you built it yourself.
+
+Still need yt-dlp and ffmpeg installed at runtime (`brew install yt-dlp ffmpeg`).
 
 ## Usage
 
