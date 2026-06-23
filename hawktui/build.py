@@ -52,6 +52,12 @@ def main() -> None:
             "--name", APP_NAME,
             "--clean",
             "--noconfirm",
+            # Textual lazily imports its widgets (e.g. TabPane ->
+            # textual.widgets._tab_pane) via __getattr__, which PyInstaller's
+            # static analysis can't follow. --collect-all pulls in every
+            # submodule plus the bundled .tcss data files so the frozen binary
+            # doesn't ModuleNotFoundError at runtime.
+            "--collect-all", "textual",
             MAIN_SCRIPT,
         ]
         run(pyinstaller_cmd)
