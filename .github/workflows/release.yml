@@ -42,15 +42,22 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip wheel
-          python -m pip install pyinstaller textual pyperclip
+          python -m pip install --upgrade pyinstaller textual pyperclip
 
       - name: Build standalone binary
+        # Textual lazily imports its widgets (e.g. TabPane ->
+        # textual.widgets._tab_pane) via __getattr__, which PyInstaller's static
+        # analysis can't follow. --collect-all pulls in every submodule plus the
+        # bundled .tcss data files so the frozen binary doesn't ModuleNotFoundError
+        # at runtime. This must stay in sync with hawktui/build.py.
         run: >
           python -m PyInstaller
           --onefile
           --name hawktui
           --clean
           --noconfirm
+          --collect-all textual
+          --collect-all pyperclip
           hawktui/hawktui.py
 
       - name: Rename binary to asset name

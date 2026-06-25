@@ -19,3 +19,7 @@ env/
 *.swp
 .idea/
 .vscode/
+
+bugs.md
+featureideas.md
+readmeupdate.md
