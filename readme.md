@@ -45,8 +45,14 @@ HawkTUI is the one that actually **spits on that thang**.
 - **Takes Multiple at Once:** Configurable parallel downloads. Whether you want to take them one at a time or handle 8 concurrently, HawkTUI won't judge your bandwidth.
 - **Insanely deep settings** - format selection, audio extraction, subtitles, SponsorBlock, cookies-from-browser, remuxing, rate limiting, and other settings. HawkTUI remembers it exactly how you like it with a persistent config.
 - **Queue management** - retry failed downloads, clear finished ones, flex on your completed list
+- **Hands-on queue control** - grab any row and do what you want with it: cancel it (`x`), yank it out (`d`), copy its URL back to your clipboard (`y`), open it in your browser (`b`), or open the finished file or its folder (`Enter`). Hit `o` to jump straight to your downloads.
+- **Pause the whole queue** (`p`) - freeze new downloads without killing the ones already going. Different from `w`, which only toggles clipboard watching.
+- **Allow and deny lists** - only swallow what you actually want. Restrict or block URLs with regex or plain substring patterns, per-site if you like (only `youtu\.be`, or never anything with `?list=`). Off by default.
+- **Download history** - keeps a running `hawktui-history.log` of everything it's swallowed (when, what, where, how big) right in your downloads folder.
+- **Notifications** - in-app toasts when something finishes, fails, or the whole queue drains, plus optional desktop notifications so it can tell you even when the terminal's in the background.
+- **Professional mode** - one switch swaps all the spicy copy and status labels for neutral wording, for when you're running this on a work machine or taking SFW screenshots.
 - **Built-in format listing** (`-F`) without leaving the app
-- **Gorgeous themes** - Nord, Catppuccin Mocha, Tokyo Night, Gruvbox, Dracula, and more. Looks slutty in the best way for the r/unixporn screenshot.
+- **Gorgeous themes** - Nord, Catppuccin Mocha, Tokyo Night, Gruvbox (the default, to match the hawk), Dracula, and more. Looks slutty in the best way for the r/unixporn screenshot.
 
 ## Installation
 
@@ -112,7 +118,7 @@ chmod +x hawktui-*
 
 ### macOS users
 
-There's no prebuilt macOS binary — build your own from source, it only takes a minute. Clone the repo (see [Installation](#installation) above), then run:
+There's no prebuilt macOS binary, build your own from source, it only takes a minute. Clone the repo (see [Installation](#installation) above), then run:
 
 ```bash
 cd hawktui
@@ -136,6 +142,13 @@ Once you are deep inside the TUI, use these keys to control the rhythm:
 | `f` | Voyeuristically list formats (`-F`) for the current URL |
 | `c` | Wipes off the mess once downloads are finished |
 | `r` | Retry all the ones that failed. We do not accept a floppy, failed network request. |
+| `p` | Pause or resume the whole queue. In-flight downloads keep going, nothing new gets started. Not the same as `w`. |
+| `x` | Spit the selected download back out (cancel it mid-thrust) |
+| `d` | Remove the selected row entirely (spits it out first if it's still going) |
+| `y` | Yank the selected URL back onto your clipboard |
+| `b` | Open the selected URL in your browser |
+| `Enter` | Open the finished file, or its folder if we don't know the exact path yet |
+| `o` | Open your downloads folder |
 | `Ctrl+P` | Command palette (for the fancy ones) |
 | `q` | Pull out and exit (saves your config like a good girl) |
 
@@ -149,6 +162,11 @@ You can tweak almost every yt-dlp flag from inside the app under the **Settings*
 - Output template
 - Format selector
 - Max parallel downloads
+- Professional mode (SFW) for work machines and clean screenshots
+- URL allow list (only queue URLs matching these patterns, off if empty)
+- URL deny list (never queue URLs matching these patterns, off if empty)
+- Save download history to `hawktui-history.log` in your downloads folder
+- Notifications (in-app toasts and optional desktop notifications)
 - Audio extraction + format
 - Subtitles (write, embed, auto-generated)
 - SponsorBlock removal
