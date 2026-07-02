@@ -32,7 +32,8 @@ from textual import events, on, work
 from textual.worker import get_current_worker
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Grid, Horizontal, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Collapsible,
@@ -51,19 +52,15 @@ from textual.widgets import (
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "hawktui"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
+QUEUE_STATE_PATH = CONFIG_DIR / "queue.json"
 
 PROG = "@@HAWK@@"
 PROGRESS_TEMPLATE = (
     f"download:{PROG}\t%(progress._percent_str)s\t%(progress._speed_str)s"
     f"\t%(progress._eta_str)s\t%(info.title)s"
 )
-# Brand accent pulled from assets/hawktui.svg (the rust/terracotta hawk).
 BRAND_COLOR = "#b6623f"
 
-# On-brand labels for the queue's Status column. Internal status strings stay
-# canonical everywhere else (counts, clear/retry checks all compare against
-# them); only the rendered label changes. "Professional mode" (the `sfw`
-# setting) shows the plain internal status instead.
 STATUS_VERBS = {
     "queued": "lurking",
     "downloading": "swallowing",
@@ -74,7 +71,6 @@ STATUS_VERBS = {
 
 
 def display_status(status: str, sfw: bool) -> str:
-    """Map an internal status to its on-brand label, unless SFW mode is on."""
     if sfw:
         return status
     if status.startswith("error"):
@@ -84,20 +80,10 @@ def display_status(status: str, sfw: bool) -> str:
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"']+")
-# Punctuation that commonly trails a URL in prose/markdown but isn't part of it
-# (e.g. a Markdown link "(https://youtu.be/abc)" or a sentence "...see abc.").
 _URL_TRAILING = ").,;!?'\""
 
 
 def extract_urls(text: str) -> list[str]:
-    """Find URLs in text, stripping punctuation that trails them in prose.
-
-    URL_RE's character class only stops at whitespace/<>"', so copying a URL
-    inside parentheses or with trailing punctuation captures that punctuation
-    (e.g. "https://youtu.be/abc)" or "...abc."), which then gets passed
-    verbatim to yt-dlp and fails. Trim the common trailing characters here so
-    every call site benefits.
-    """
     urls = []
     for match in URL_RE.findall(text):
         url = match.rstrip(_URL_TRAILING)
@@ -107,21 +93,10 @@ def extract_urls(text: str) -> list[str]:
 
 
 def split_patterns(text: str) -> list[str]:
-    """Split an allow/deny setting into individual patterns.
-
-    Patterns are separated by commas or newlines; blanks are dropped, so an
-    empty/whitespace setting yields no patterns (i.e. the filter is off).
-    """
     return [p.strip() for p in re.split(r"[,\n]", text or "") if p.strip()]
 
 
 def url_matches_any(url: str, patterns: list[str]) -> bool:
-    """True if `url` matches any pattern, regex first then substring fallback.
-
-    Each pattern is tried as a regex (so users can write per-site rules like
-    `youtube\\.com|youtu\\.be`); if it isn't valid regex it falls back to a
-    plain case-sensitive substring test so a literal like `?list=` still works.
-    """
     for pat in patterns:
         try:
             if re.search(pat, url):
@@ -131,16 +106,12 @@ def url_matches_any(url: str, patterns: list[str]) -> bool:
                 return True
     return False
 
-# yt-dlp announces the output path in a few shapes depending on whether a merge
-# or post-processing step ran. Capture whichever we see so the per-row "open"
-# action can point at the real file instead of just the download folder.
 _DEST_RE = re.compile(r"\bDestination:\s*(.+?)\s*$")
 _MERGE_RE = re.compile(r'Merging formats into "(.+?)"')
 _ALREADY_RE = re.compile(r"^\[download\]\s+(.+?)\s+has already been downloaded")
 
 
 def human_size(n: int) -> str:
-    """Bytes as a compact human string (e.g. 45.2 MiB)."""
     size = float(n)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
         if size < 1024 or unit == "TiB":
@@ -150,7 +121,6 @@ def human_size(n: int) -> str:
 
 
 def human_time(seconds: float) -> str:
-    """Seconds as a compact human string (e.g. 9s, 1m03s, 1h02m)."""
     s = int(round(seconds))
     if s < 60:
         return f"{s}s"
@@ -159,8 +129,6 @@ def human_time(seconds: float) -> str:
     return f"{s // 3600}h{(s % 3600) // 60:02d}m"
 
 PREFERRED_THEMES = [
-    # Gruvbox first: its warm earthy palette matches the rust hawk logo, and it
-    # backs the L3 `themes[0]` fallback when a saved theme is unavailable.
     "gruvbox", "nord", "tokyo-night", "catppuccin-mocha", "dracula",
     "monokai", "flexoki", "textual-dark", "textual-light",
     "catppuccin-latte", "solarized-light",
@@ -194,15 +162,10 @@ DEFAULTS: dict = {
     "max_parallel": "2",
     "watch_on_start": True,
     "url_filter": "",
-    # Allow/deny lists, off by default (empty = no effect). Each is a
-    # comma/newline-separated list of patterns, tried as regex and falling
-    # back to a plain substring match. A URL is rejected if it matches any
-    # deny pattern, or — when the allow list is non-empty — matches none of it.
     "url_allow": "",
     "url_deny": "",
-    # Append a record of every finished download to a history log in the
-    # download directory (see _write_history).
     "download_history": True,
+    "persist_queue": True,
     "theme": "gruvbox",
     "sfw": False,
     "notify_toast": True,
@@ -263,6 +226,36 @@ def save_config(cfg: dict) -> None:
             s = str(v).replace("\\", "\\\\").replace('"', '\\"')
             lines.append(f'{k} = "{s}"')
     CONFIG_PATH.write_text("\n".join(lines) + "\n")
+
+
+def is_unfinished(status: str) -> bool:
+    return status not in ("done", "cancelled")
+
+
+def save_queue_state(records: list[dict]) -> None:
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "downloads": records,
+        }
+        tmp = QUEUE_STATE_PATH.with_name(QUEUE_STATE_PATH.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(QUEUE_STATE_PATH)
+    except OSError:
+        pass
+
+
+def load_queue_state() -> list[dict]:
+    if not QUEUE_STATE_PATH.exists():
+        return []
+    try:
+        data = json.loads(QUEUE_STATE_PATH.read_text(encoding="utf-8"))
+        records = data.get("downloads", [])
+        return records if isinstance(records, list) else []
+    except (OSError, ValueError):
+        return []
 
 
 def build_command(cfg: dict, url: str) -> list[str]:
@@ -377,18 +370,48 @@ class Download:
     speed: str = "—"
     eta: str = "—"
     returncode: int | None = None
-    # Final output path, captured from yt-dlp's "Destination:" / "Merging
-    # formats into" lines when available. Lets per-row "open" target the actual
-    # file; falls back to the download directory when unknown.
     filepath: str = ""
-    # Wall-clock start (monotonic) and, once finished, elapsed seconds + the
-    # final file size in bytes — surfaced in the completion log line.
     started_at: float = 0.0
     elapsed: float = 0.0
     filesize: int = 0
 
     def display_title(self) -> str:
         return self.title or self.url
+
+class ResumeScreen(ModalScreen[bool]):
+    CSS = """
+    ResumeScreen { align: center middle; }
+    #resume-dialog {
+        grid-size: 2;
+        grid-gutter: 1 2;
+        grid-rows: 1fr 3;
+        padding: 1 2;
+        width: 60;
+        height: 11;
+        border: thick $primary;
+        background: $surface;
+    }
+    #resume-msg { column-span: 2; height: 1fr; content-align: center middle; }
+    #resume-dialog Button { width: 100%; }
+    """
+
+    def __init__(self, count: int, message: str) -> None:
+        super().__init__()
+        self._count = count
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        yield Grid(
+            Label(self._message, id="resume-msg"),
+            Button("Resume", variant="primary", id="resume-yes"),
+            Button("Discard", id="resume-no"),
+            id="resume-dialog",
+        )
+
+    @on(Button.Pressed)
+    def _on_button(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "resume-yes")
+
 
 class hawktui(App):
     TITLE = "HawkTUI"
@@ -475,20 +498,10 @@ class hawktui(App):
             self.gate = Gate(2)
         self.col_keys: list = []
         self._save_timer = None
-        # Pending downloads wait here as lightweight objects; a single
-        # dispatcher thread (started in on_mount) pulls from this queue and
-        # only spawns a worker once a concurrency slot is free. This keeps the
-        # number of live OS threads bounded by max_parallel no matter how many
-        # URLs are pasted at once, instead of one parked thread per URL.
         self.pending: queue.Queue = queue.Queue()
         self._stopping = threading.Event()
-        # When True the dispatcher stops pulling new work off the queue; any
-        # in-flight downloads keep running (see action_toggle_pause).
         self._queue_paused = False
-        # Brief "saved" flash: monotonic deadline until which the status bar
-        # shows the indicator (see _mark_saved / update_status).
         self._saved_until = 0.0
-        # Re-armed on each enqueue; guards the one-shot "all done" notification.
         self._announced_alldone = False
 
     def compose(self) -> ComposeResult:
@@ -536,6 +549,7 @@ class hawktui(App):
                 yield self._row("URL allow list", self._in("url_allow", "regex/substring, comma-sep (off if empty)"))
                 yield self._row("URL deny list", self._in("url_deny", "regex/substring, comma-sep (off if empty)"))
                 yield self._row("Save download history", self._sw("download_history"))
+                yield self._row("Resume queue on restart", self._sw("persist_queue"))
             with Collapsible(title="Notifications"):
                 yield self._row("In-app toasts", self._sw("notify_toast"))
                 yield self._row("Desktop notifications", self._sw("notify_desktop"))
@@ -583,6 +597,7 @@ class hawktui(App):
         self.set_interval(0.5, self.update_status)
         self.update_status()
         self._dispatcher()
+        self._offer_resume()
 
     def _check_environment(self) -> None:
         if shutil.which("yt-dlp") is None:
@@ -591,8 +606,6 @@ class hawktui(App):
             self._write_log("WARNING: pyperclip not installed; clipboard watch disabled.")
         elif sys.platform.startswith("linux") \
                 and shutil.which("xclip") is None and shutil.which("xsel") is None:
-            # Only Linux relies on xclip/xsel; macOS (pbcopy/pbpaste) and
-            # Windows (native clipboard) work without them, so don't nag there.
             self._write_log("WARNING: install xclip or xsel for X11 clipboard access.")
         self._write_log(self._voice(
             "locked and loaded — 'w' to start watching, 'a' to add a URL.",
@@ -615,7 +628,6 @@ class hawktui(App):
             f"{state}{qstate}   active {active}  queued {queued}  done {done}  failed {failed}"
             f"   │ dir: {self.cfg['download_dir']}   │ parallel: {self.gate.limit}{saved}"
         )
-        # Mirror the watch state into the Header sub-title (title-bar indicator).
         watch = "● watching" if self.watching else "○ paused"
         self.sub_title = f"v{__version__} · {watch}"
 
@@ -658,25 +670,15 @@ class hawktui(App):
                       display_status(dl.status, bool(self.cfg["sfw"])),
                       dl.percent, dl.speed, dl.eta, key=dl.id)
         self._write_log(f"queued: {url}")
-        # New work arrived — re-arm the one-shot "all downloads complete" toast.
         self._announced_alldone = False
+        self._save_queue_state()
         self.pending.put(dl)
 
     @work(thread=True, group="dispatcher")
     def _dispatcher(self) -> None:
-        """Pull queued downloads and start them as slots free up.
-
-        Runs as a single long-lived thread. It blocks on the pending queue,
-        then blocks on a free concurrency slot, and only then spawns the actual
-        download worker — so waiting URLs sit in the queue as data, not as
-        parked threads. Short timeouts keep it responsive to shutdown.
-        """
         worker = get_current_worker()
 
         def stopping() -> bool:
-            # Stop on explicit quit OR when Textual cancels this worker during
-            # app shutdown, so the thread never outlives the app and blocks the
-            # executor join on teardown.
             return self._stopping.is_set() or worker.is_cancelled
 
         while not stopping():
@@ -694,8 +696,6 @@ class hawktui(App):
                 self.gate.release()
                 return
             if self._queue_paused:
-                # Paused while we were waiting for a slot — hand the work back
-                # so it isn't started until the user resumes.
                 self.gate.release()
                 self.pending.put(dl)
                 continue
@@ -703,12 +703,11 @@ class hawktui(App):
 
     @work(thread=True, group="downloads")
     def download_worker(self, dl: Download) -> None:
-        # The dispatcher has already reserved a concurrency slot via
-        # gate.acquire(); the matching release() happens in the finally below.
         try:
             dl.status = "downloading"
             dl.started_at = time.monotonic()
             self.call_from_thread(self._update_row, dl)
+            self.call_from_thread(self._save_queue_state)
             cmd = build_command(self.cfg, dl.url)
             self.call_from_thread(self._write_log, "$ " + " ".join(cmd))
             try:
@@ -775,13 +774,6 @@ class hawktui(App):
             pass
 
     def _capture_filepath(self, dl: Download, line: str) -> None:
-        """Record the output path from yt-dlp's chatter, if this line has one.
-
-        Runs in the download worker thread and only sets a plain attribute, so
-        it's safe without call_from_thread. Later matches (e.g. a merge target
-        or a post-processing Destination) overwrite earlier ones, which is
-        normally the final file the user cares about.
-        """
         for rx in (_MERGE_RE, _DEST_RE, _ALREADY_RE):
             m = rx.search(line)
             if m:
@@ -791,7 +783,6 @@ class hawktui(App):
                 return
 
     def _toast(self, msg: str, severity: str = "information") -> None:
-        """In-app toast, gated by the notify_toast setting."""
         if not self.cfg.get("notify_toast"):
             return
         try:
@@ -800,11 +791,6 @@ class hawktui(App):
             pass
 
     def _desktop_notify(self, title: str, msg: str) -> None:
-        """OS-level notification, gated by the notify_desktop setting.
-
-        Best-effort and non-blocking: notify-send on Linux, osascript on
-        macOS. Silently does nothing elsewhere or if the tool is missing.
-        """
         if not self.cfg.get("notify_desktop"):
             return
         try:
@@ -817,14 +803,6 @@ class hawktui(App):
             pass
 
     def _write_history(self, dl: Download) -> None:
-        """Append a record of a finished download to a history log.
-
-        The log lives in the download directory as `hawktui-history.log`, one
-        tab-separated line per download: timestamp, outcome, title, URL, output
-        path, final size, and elapsed time. Best-effort and gated by the
-        download_history setting; failures (read-only dir, etc.) are ignored so
-        they never interfere with the download itself.
-        """
         if not self.cfg.get("download_history"):
             return
         ddir = os.path.expanduser(self._downloads_dir())
@@ -842,12 +820,52 @@ class hawktui(App):
         except OSError:
             pass
 
-    def _on_download_finished(self, dl: Download) -> None:
-        """Runs on the main thread once a worker exits (any terminal status).
+    def _save_queue_state(self) -> None:
+        if not self.cfg.get("persist_queue"):
+            try:
+                QUEUE_STATE_PATH.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return
+        records = [
+            {"url": d.url, "title": d.title, "status": d.status}
+            for d in self.downloads.values()
+        ]
+        save_queue_state(records)
 
-        Computes elapsed time + final size, logs a summary, fires
-        notifications, and checks whether the whole queue just drained.
-        """
+    def _offer_resume(self) -> None:
+        """If a previous session left unfinished downloads, ask to resume them."""
+        if not self.cfg.get("persist_queue"):
+            return
+        records = load_queue_state()
+        pending = [r for r in records
+                   if r.get("url") and is_unfinished(str(r.get("status", "")))]
+        if not pending:
+            return
+        n = len(pending)
+        msg = self._voice(
+            f"{n} link{'s' if n != 1 else ''} from last time never got swallowed. "
+            "Spit them back into the queue?",
+            f"{n} unfinished download{'s' if n != 1 else ''} from last session. "
+            "Resume them?",
+        )
+        self.push_screen(
+            ResumeScreen(n, msg),
+            lambda resume: self._handle_resume(pending, bool(resume)),
+        )
+
+    def _handle_resume(self, pending: list[dict], resume: bool) -> None:
+        if resume:
+            for r in pending:
+                self.enqueue(str(r["url"]))
+            self._write_log(self._voice(
+                f"resumed {len(pending)} from last time — back on the menu.",
+                f"resumed {len(pending)} download(s) from last session.",
+            ))
+        else:
+            self._save_queue_state()
+
+    def _on_download_finished(self, dl: Download) -> None:
         if dl.started_at:
             dl.elapsed = time.monotonic() - dl.started_at
         if dl.filepath:
@@ -859,6 +877,7 @@ class hawktui(App):
                 pass
 
         self._write_history(dl)
+        self._save_queue_state()
 
         title = dl.display_title()
         if dl.status == "done":
@@ -874,11 +893,9 @@ class hawktui(App):
             self._toast(self._voice(f"floppy: {title}", f"failed: {title}"),
                         severity="error")
             self._desktop_notify("HawkTUI", f"Failed: {title}")
-        # Cancelled downloads are user-initiated; no notification.
         self._maybe_all_done()
 
     def _maybe_all_done(self) -> None:
-        """Fire a one-shot 'all downloads complete' notification when idle."""
         if self._stopping.is_set() or self._announced_alldone:
             return
         ds = list(self.downloads.values())
@@ -889,11 +906,10 @@ class hawktui(App):
         if not any(d.status == "done" for d in ds):
             return
         self._announced_alldone = True
-        self._toast(self._voice("all swallowed 🦅", "all downloads complete"))
+        self._toast(self._voice("all swallowed", "all downloads complete"))
         self._desktop_notify("HawkTUI", "All downloads complete")
 
     def _mark_saved(self) -> None:
-        """Flash a brief 'saved' indicator in the status bar."""
         self._saved_until = time.monotonic() + 1.5
         try:
             self.update_status()
@@ -901,17 +917,15 @@ class hawktui(App):
             pass
 
     def _voice(self, spicy: str, plain: str) -> str:
-        """Pick on-brand or neutral copy depending on Professional mode."""
         return plain if self.cfg.get("sfw") else spicy
 
     def _tagline(self) -> str:
         return self._voice(
-            "🦅 HawkTUI — copy a link and it's already swallowed",
+            "HawkTUI — copy a link and it's already swallowed",
             "HawkTUI — clipboard-watching yt-dlp frontend",
         )
 
     def _apply_voice(self) -> None:
-        """Re-render brand copy + status labels after the SFW toggle flips."""
         try:
             self.query_one("#brandbar", Static).update(self._tagline())
         except Exception:
@@ -935,31 +949,17 @@ class hawktui(App):
             self.call_from_thread(self._write_log, line)
 
     def _persist(self, key: str, value) -> None:
-        """Update in-memory config and write it to disk immediately.
-
-        Used for discrete, low-frequency controls (switches, selects).
-        """
         self.cfg[key] = value
         save_config(self.cfg)
         self._mark_saved()
 
     def _persist_debounced(self, key: str, value) -> None:
-        """Update in-memory config now, but defer the disk write.
-
-        Input.Changed fires on every keystroke (and once per field for the
-        initial programmatic values during compose), so writing the config on
-        each event hammers the disk and can persist a half-typed value. The
-        in-memory cfg is updated immediately — downloads always use the current
-        value — while rapid edits are coalesced into a single delayed write.
-        A normal quit (action_quit) calls save_config, flushing anything left.
-        """
         self.cfg[key] = value
         if self._save_timer is not None:
             self._save_timer.stop()
         self._save_timer = self.set_timer(0.75, self._flush_save)
 
     def _flush_save(self) -> None:
-        """Write a pending debounced config change to disk, if any."""
         if self._save_timer is None:
             return
         self._save_timer.stop()
@@ -973,8 +973,9 @@ class hawktui(App):
             key = event.switch.id[4:]
             self._persist(key, bool(event.value))
             if key == "sfw":
-                # Re-render the tagline and status labels in the new voice.
                 self._apply_voice()
+            elif key == "persist_queue":
+                self._save_queue_state()
 
     @on(Select.Changed)
     def _on_select(self, event: Select.Changed) -> None:
@@ -999,13 +1000,11 @@ class hawktui(App):
 
     @on(Input.Submitted)
     def _on_setting_submit(self, event: Input.Submitted) -> None:
-        # Pressing Enter in a settings field flushes the pending write now.
         if event.input.id and event.input.id.startswith("set-"):
             self._flush_save()
 
     @on(events.DescendantBlur)
     def _on_descendant_blur(self) -> None:
-        # Moving focus off a settings field flushes the pending write now.
         self._flush_save()
 
     @on(Input.Submitted, "#add-url")
@@ -1079,20 +1078,20 @@ class hawktui(App):
                 except Exception:
                     pass
                 self.downloads.pop(dl.id, None)
-                # Forget the URL too, so re-copying it later re-downloads
-                # instead of being silently swallowed by the seen-set.
                 self.seen.discard(dl.url)
+        self._save_queue_state()
         self.update_status()
 
     def action_retry_failed(self) -> None:
+        requeued = False
         for dl in list(self.downloads.values()):
             if dl.status.startswith("error") or dl.status == "missing":
                 dl.status, dl.percent, dl.speed, dl.eta = "queued", "—", "—", "—"
                 self._update_row(dl)
-                # Re-queue through the dispatcher so a concurrency slot is
-                # reserved before the worker runs (see _dispatcher); calling
-                # download_worker directly would bypass the gate.
                 self.pending.put(dl)
+                requeued = True
+        if requeued:
+            self._save_queue_state()
 
     def _selected_download(self) -> Download | None:
         """The Download under the queue table's row cursor, if any."""
@@ -1110,7 +1109,6 @@ class hawktui(App):
         return self.downloads.get(dl_id) if dl_id else None
 
     def _open_path(self, path: str) -> bool:
-        """Reveal a file or folder in the OS file manager / default handler."""
         target = os.path.expanduser(path)
         if not os.path.exists(target):
             self._write_log(f"can't open — not found: {target}")
@@ -1146,8 +1144,6 @@ class hawktui(App):
                 "nothing to cancel — that row isn't downloading.",
             ))
             return
-        # Mark it before terminating so the worker reports "cancelled" rather
-        # than the raw SIGTERM exit code.
         self._cancelled.add(dl.id)
         try:
             proc.terminate()
@@ -1172,9 +1168,8 @@ class hawktui(App):
         except Exception:
             pass
         self.downloads.pop(dl.id, None)
-        # Forget the URL so re-copying it later re-downloads instead of being
-        # silently skipped by the seen-set (mirrors action_clear_done).
         self.seen.discard(dl.url)
+        self._save_queue_state()
         self.update_status()
 
     def action_copy_url(self) -> None:
@@ -1189,7 +1184,6 @@ class hawktui(App):
         except Exception as exc:
             self._write_log(f"couldn't copy: {exc}")
             return
-        # Don't let our own clipboard write bounce back through poll_clipboard.
         self.last_clip = dl.url
         self._write_log(self._voice(
             f"yanked back to your clipboard: {dl.url}",
@@ -1209,8 +1203,6 @@ class hawktui(App):
 
     @on(DataTable.RowSelected, "#queue-table")
     def _on_row_selected(self, event: DataTable.RowSelected) -> None:
-        # Enter on a row opens the downloaded file if we captured its path,
-        # otherwise reveals the download folder.
         dl = self.downloads.get(event.row_key.value) if event.row_key else None
         if dl is not None and dl.filepath \
                 and os.path.exists(os.path.expanduser(dl.filepath)):

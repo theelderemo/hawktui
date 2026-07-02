@@ -19,7 +19,6 @@ env/
 *.swp
 .idea/
 .vscode/
+.claude
 
-bugs.md
-featureideas.md
-readmeupdate.md
+internaldocs/
