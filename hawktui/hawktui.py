@@ -9,6 +9,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -80,13 +81,15 @@ def display_status(status: str, sfw: bool) -> str:
 
 
 URL_RE = re.compile(r"https?://[^\s<>\"']+")
-_URL_TRAILING = ").,;!?'\""
+_URL_TRAILING = ".,;!?"
 
 
 def extract_urls(text: str) -> list[str]:
     urls = []
     for match in URL_RE.findall(text):
         url = match.rstrip(_URL_TRAILING)
+        while url.endswith(")") and url.count(")") > url.count("("):
+            url = url[:-1].rstrip(_URL_TRAILING)
         if url:
             urls.append(url)
     return urls
@@ -199,18 +202,40 @@ DEFAULTS: dict = {
 BOOL_KEYS = {k for k, v in DEFAULTS.items() if isinstance(v, bool)}
 
 
+_load_warning: str | None = None
+
+
+def _normalize_config(cfg: dict) -> dict:
+    for k in DEFAULTS:
+        if k in BOOL_KEYS:
+            cfg[k] = bool(cfg[k])
+        else:
+            cfg[k] = str(cfg[k])
+    return cfg
+
+
 def load_config() -> dict:
+    global _load_warning
+    _load_warning = None
     cfg = dict(DEFAULTS)
     if CONFIG_PATH.exists() and tomllib is not None:
         try:
             with CONFIG_PATH.open("rb") as fh:
                 data = tomllib.load(fh)
-            for k in DEFAULTS:
-                if k in data:
-                    cfg[k] = data[k]
-        except Exception:
-            pass
-    return cfg
+        except Exception as exc:
+            backup = CONFIG_PATH.with_name(CONFIG_PATH.name + ".bad")
+            try:
+                shutil.copy2(CONFIG_PATH, backup)
+                _load_warning = (
+                    f"config unreadable ({exc}); backed up to {backup.name}, using defaults."
+                )
+            except OSError:
+                _load_warning = f"config unreadable ({exc}); using defaults."
+            return _normalize_config(cfg)
+        for k in DEFAULTS:
+            if k in data:
+                cfg[k] = data[k]
+    return _normalize_config(cfg)
 
 
 def save_config(cfg: dict) -> None:
@@ -325,7 +350,7 @@ def build_command(cfg: dict, url: str) -> list[str]:
     if cfg["cookies_from_browser"]:
         cmd += ["--cookies-from-browser", cfg["cookies_from_browser"]]
 
-    cmd.append(url)
+    cmd += ["--", url]
     return cmd
 
 
@@ -531,7 +556,11 @@ class hawktui(App):
         return Input(value=str(self.cfg[key]), placeholder=placeholder, id=f"set-{key}")
 
     def _sel(self, key: str, options) -> Select:
-        return Select(options, value=self.cfg[key], allow_blank=False, id=f"set-{key}")
+        value = self.cfg[key]
+        opts = list(options)
+        if all(value != v for _, v in opts):
+            opts.append((str(value), value))
+        return Select(opts, value=value, allow_blank=False, id=f"set-{key}")
 
     def _compose_settings(self) -> ComposeResult:
         with VerticalScroll(classes="settings-scroll"):
@@ -600,6 +629,8 @@ class hawktui(App):
         self._offer_resume()
 
     def _check_environment(self) -> None:
+        if _load_warning:
+            self._write_log("WARNING: " + _load_warning)
         if shutil.which("yt-dlp") is None:
             self._write_log("WARNING: yt-dlp not found on PATH (pip install yt-dlp).")
         if pyperclip is None:
@@ -644,26 +675,28 @@ class hawktui(App):
         for url in extract_urls(text):
             self.enqueue(url)
 
-    def enqueue(self, url: str) -> None:
+    def enqueue(self, url: str, title: str = "", resuming: bool = False) -> None:
         url = url.strip()
         if not url:
             return
         if url in self.seen:
             self._write_log(f"skipped (already in list): {url}")
             return
-        flt = self.cfg["url_filter"].strip()
-        if flt and flt not in url:
-            return
-        deny = split_patterns(self.cfg.get("url_deny", ""))
-        if deny and url_matches_any(url, deny):
-            self._write_log(f"skipped (deny list): {url}")
-            return
-        allow = split_patterns(self.cfg.get("url_allow", ""))
-        if allow and not url_matches_any(url, allow):
-            self._write_log(f"skipped (not in allow list): {url}")
-            return
+        if not resuming:
+            flt = self.cfg["url_filter"].strip()
+            if flt and flt not in url:
+                self._write_log(f"skipped (url filter): {url}")
+                return
+            deny = split_patterns(self.cfg.get("url_deny", ""))
+            if deny and url_matches_any(url, deny):
+                self._write_log(f"skipped (deny list): {url}")
+                return
+            allow = split_patterns(self.cfg.get("url_allow", ""))
+            if allow and not url_matches_any(url, allow):
+                self._write_log(f"skipped (not in allow list): {url}")
+                return
         self.seen.add(url)
-        dl = Download(id=f"d{next(self._counter)}", url=url)
+        dl = Download(id=f"d{next(self._counter)}", url=url, title=title)
         self.downloads[dl.id] = dl
         table = self.query_one("#queue-table", DataTable)
         table.add_row(dl.id[1:], dl.display_title(),
@@ -689,6 +722,8 @@ class hawktui(App):
                 dl = self.pending.get(timeout=0.25)
             except queue.Empty:
                 continue
+            if dl.id not in self.downloads or dl.status == "cancelled":
+                continue
             while not self.gate.acquire(timeout=0.25):
                 if stopping():
                     return
@@ -699,10 +734,16 @@ class hawktui(App):
                 self.gate.release()
                 self.pending.put(dl)
                 continue
+            if dl.id not in self.downloads or dl.status == "cancelled":
+                self.gate.release()
+                continue
             self.download_worker(dl)
 
     @work(thread=True, group="downloads")
     def download_worker(self, dl: Download) -> None:
+        if dl.id not in self.downloads or dl.status == "cancelled":
+            self.gate.release()
+            return
         try:
             dl.status = "downloading"
             dl.started_at = time.monotonic()
@@ -714,6 +755,9 @@ class hawktui(App):
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1,
+                    start_new_session=(os.name != "nt"),
+                    creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
+                                   if os.name == "nt" else 0),
                 )
             except FileNotFoundError:
                 dl.status = "missing"
@@ -752,8 +796,19 @@ class hawktui(App):
         finally:
             self.procs.pop(dl.id, None)
             self.gate.release()
-            self.call_from_thread(self._update_row, dl)
-            self.call_from_thread(self._on_download_finished, dl)
+            if dl.started_at:
+                dl.elapsed = time.monotonic() - dl.started_at
+            if dl.filepath:
+                p = os.path.expanduser(dl.filepath)
+                try:
+                    if os.path.exists(p):
+                        dl.filesize = os.path.getsize(p)
+                except OSError:
+                    pass
+            self._write_history(dl)
+            if not self._stopping.is_set():
+                self.call_from_thread(self._update_row, dl)
+                self.call_from_thread(self._on_download_finished, dl)
 
     def _update_row(self, dl: Download) -> None:
         table = self.query_one("#queue-table", DataTable)
@@ -857,7 +912,7 @@ class hawktui(App):
     def _handle_resume(self, pending: list[dict], resume: bool) -> None:
         if resume:
             for r in pending:
-                self.enqueue(str(r["url"]))
+                self.enqueue(str(r["url"]), title=str(r.get("title", "")), resuming=True)
             self._write_log(self._voice(
                 f"resumed {len(pending)} from last time — back on the menu.",
                 f"resumed {len(pending)} download(s) from last session.",
@@ -866,17 +921,6 @@ class hawktui(App):
             self._save_queue_state()
 
     def _on_download_finished(self, dl: Download) -> None:
-        if dl.started_at:
-            dl.elapsed = time.monotonic() - dl.started_at
-        if dl.filepath:
-            p = os.path.expanduser(dl.filepath)
-            try:
-                if os.path.exists(p):
-                    dl.filesize = os.path.getsize(p)
-            except OSError:
-                pass
-
-        self._write_history(dl)
         self._save_queue_state()
 
         title = dl.display_title()
@@ -938,7 +982,7 @@ class hawktui(App):
         cmd = ["yt-dlp", "--color", "never", "-F"]
         if self.cfg["cookies_from_browser"]:
             cmd += ["--cookies-from-browser", self.cfg["cookies_from_browser"]]
-        cmd.append(url)
+        cmd += ["--", url]
         self.call_from_thread(self._write_log, "$ " + " ".join(cmd))
         try:
             res = subprocess.run(cmd, capture_output=True, text=True)
@@ -1072,7 +1116,7 @@ class hawktui(App):
     def action_clear_done(self) -> None:
         table = self.query_one("#queue-table", DataTable)
         for dl in list(self.downloads.values()):
-            if dl.status == "done" or dl.status.startswith("error") or dl.status == "missing":
+            if dl.status in ("done", "cancelled", "missing") or dl.status.startswith("error"):
                 try:
                     table.remove_row(dl.id)
                 except Exception:
@@ -1133,22 +1177,42 @@ class hawktui(App):
         if self._open_path(ddir):
             self._write_log(self._voice(f"opening the nest: {ddir}", f"opening {ddir}"))
 
+    def _terminate_proc(self, proc: subprocess.Popen) -> None:
+        if proc is None:
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                               capture_output=True)
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
     def action_cancel_selected(self) -> None:
         dl = self._selected_download()
         if dl is None:
             return
         proc = self.procs.get(dl.id)
         if proc is None:
+            if dl.status == "queued":
+                dl.status = "cancelled"
+                self._update_row(dl)
+                self._save_queue_state()
+                self.update_status()
+                self._write_log(self._voice(
+                    f"spat it back out: {dl.url}", f"cancelled: {dl.url}"))
+                return
             self._write_log(self._voice(
                 "nothing to spit out — that one isn't in flight.",
                 "nothing to cancel — that row isn't downloading.",
             ))
             return
         self._cancelled.add(dl.id)
-        try:
-            proc.terminate()
-        except Exception:
-            pass
+        self._terminate_proc(proc)
         self._write_log(self._voice(f"spat it back out: {dl.url}", f"cancelled: {dl.url}"))
 
     def action_remove_selected(self) -> None:
@@ -1158,10 +1222,7 @@ class hawktui(App):
         proc = self.procs.get(dl.id)
         if proc is not None:
             self._cancelled.add(dl.id)
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            self._terminate_proc(proc)
         table = self.query_one("#queue-table", DataTable)
         try:
             table.remove_row(dl.id)
@@ -1213,10 +1274,7 @@ class hawktui(App):
     def action_quit(self) -> None:
         self._stopping.set()
         for proc in list(self.procs.values()):
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            self._terminate_proc(proc)
         save_config(self.cfg)
         self.exit()
 
