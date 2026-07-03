@@ -283,6 +283,18 @@ def load_queue_state() -> list[dict]:
         return []
 
 
+def _subprocess_env() -> dict:
+    env = dict(os.environ)
+    if getattr(sys, "frozen", False):
+        for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+            orig = env.get(var + "_ORIG")
+            if orig is not None:
+                env[var] = orig
+            else:
+                env.pop(var, None)
+    return env
+
+
 def build_command(cfg: dict, url: str) -> list[str]:
     cmd = ["yt-dlp", "--color", "never", "--newline",
            "--progress-template", PROGRESS_TEMPLATE]
@@ -754,7 +766,7 @@ class hawktui(App):
             try:
                 proc = subprocess.Popen(
                     cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1,
+                    text=True, bufsize=1, env=_subprocess_env(),
                     start_new_session=(os.name != "nt"),
                     creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
                                    if os.name == "nt" else 0),
@@ -851,9 +863,9 @@ class hawktui(App):
         try:
             if sys.platform.startswith("darwin"):
                 script = f"display notification {json.dumps(msg)} with title {json.dumps(title)}"
-                subprocess.Popen(["osascript", "-e", script])
+                subprocess.Popen(["osascript", "-e", script], env=_subprocess_env())
             elif sys.platform.startswith("linux") and shutil.which("notify-send"):
-                subprocess.Popen(["notify-send", title, msg])
+                subprocess.Popen(["notify-send", title, msg], env=_subprocess_env())
         except Exception:
             pass
 
@@ -985,7 +997,8 @@ class hawktui(App):
         cmd += ["--", url]
         self.call_from_thread(self._write_log, "$ " + " ".join(cmd))
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True)
+            res = subprocess.run(cmd, capture_output=True, text=True,
+                                 env=_subprocess_env())
         except FileNotFoundError:
             self.call_from_thread(self._write_log, "ERROR: yt-dlp not found.")
             return
@@ -1159,11 +1172,11 @@ class hawktui(App):
             return False
         try:
             if sys.platform.startswith("darwin"):
-                subprocess.Popen(["open", target])
+                subprocess.Popen(["open", target], env=_subprocess_env())
             elif os.name == "nt":
                 os.startfile(target)  # type: ignore[attr-defined]
             else:
-                subprocess.Popen(["xdg-open", target])
+                subprocess.Popen(["xdg-open", target], env=_subprocess_env())
             return True
         except Exception as exc:
             self._write_log(f"could not open {target}: {exc}")
