@@ -1,11 +1,9 @@
 name: Release
 
-# Fires when the Makefile release targets push a v* tag (e.g. v0.1.0).
 on:
   push:
     tags:
       - "v*"
-  # Lets you re-run a build by hand against any tag without re-tagging.
   workflow_dispatch:
     inputs:
       tag:
@@ -13,7 +11,7 @@ on:
         required: true
 
 permissions:
-  contents: write  # needed to create/update the GitHub Release
+  contents: write  
 
 jobs:
   build:
@@ -45,11 +43,6 @@ jobs:
           python -m pip install --upgrade pyinstaller textual pyperclip
 
       - name: Build standalone binary
-        # Textual lazily imports its widgets (e.g. TabPane ->
-        # textual.widgets._tab_pane) via __getattr__, which PyInstaller's static
-        # analysis can't follow. --collect-all pulls in every submodule plus the
-        # bundled .tcss data files so the frozen binary doesn't ModuleNotFoundError
-        # at runtime. This must stay in sync with hawktui/build.py.
         run: >
           python -m PyInstaller
           --onefile
@@ -59,6 +52,18 @@ jobs:
           --collect-all textual
           --collect-all pyperclip
           hawktui/hawktui.py
+
+      - name: Build .deb package
+        if: matrix.os == 'ubuntu-latest'
+        run: python packaging/build_deb.py --binary "dist/${{ matrix.binary }}"
+
+      - name: Upload .deb artifact
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hawktui-deb
+          path: dist/*.deb
+          if-no-files-found: error
 
       - name: Rename binary to asset name
         shell: bash
@@ -95,10 +100,14 @@ jobs:
             attached below. Pick the one for your platform, make it executable
             (`chmod +x hawktui-*` on Linux), and run it.
 
-            > **macOS users:** there's no prebuilt binary — build from source instead.
+            **Debian / Ubuntu:** grab the `.deb` and install it with
+            `sudo apt install ./hawktui_*_amd64.deb` it adds `hawktui` to your `PATH`
+            and installs a desktop launcher with icon.
+
+            > **macOS users:** there's no prebuilt binary, build from source instead.
             > It takes about a minute: `git clone` the repo and run `python3 hawktui/build.py`,
             > which packages a standalone `hawktui` into `~/.local/bin`. See the README for details.
 
-            > **Heads up — these binaries do NOT bundle yt-dlp or ffmpeg.**
+            > **These binaries do NOT bundle yt-dlp or ffmpeg.**
             > Those are still required at runtime. On Linux you also need `xclip` or `xsel`
             > for clipboard watching. See the README for setup.

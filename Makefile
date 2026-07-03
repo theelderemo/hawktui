@@ -4,13 +4,14 @@ PYTHON       ?= python3
 VERSION_FILE := hawktui/hawktui.py
 VERSION      := $(shell grep -oP '__version__\s*=\s*"\K[^"]+' $(VERSION_FILE))
 
-.PHONY: help version run build release-patch release-minor release-major
+.PHONY: help version run build deb release-patch release-minor release-major
 
 help:
 	@echo "HawkTUI v$(VERSION)"
 	@echo ""
 	@echo "  make run             run from source"
 	@echo "  make build           build standalone binary into ~/.local/bin"
+	@echo "  make deb             build a .deb into dist/ (Debian/Ubuntu)"
 	@echo "  make version         print current version"
 	@echo "  make release-patch   $(VERSION) -> next patch, tag, push"
 	@echo "  make release-minor   $(VERSION) -> next minor, tag, push"
@@ -24,6 +25,9 @@ run:
 
 build:
 	cd hawktui && $(PYTHON) build.py
+
+deb:
+	$(PYTHON) packaging/build_deb.py
 
 release-patch: PART := patch
 release-minor: PART := minor

@@ -105,14 +105,23 @@ Prebuilt binaries for Linux and Windows are attached to every [release](https://
 | Platform | Asset |
 | :--- | :--- |
 | Linux (x86_64) | `hawktui-linux-x86_64` |
+| Debian / Ubuntu (x86_64) | `hawktui_<version>_amd64.deb` |
 | Windows (x86_64) | `hawktui-windows-x86_64.exe` |
 
-On Linux, make it executable and run it:
+On Linux, make the raw binary executable and run it:
 
 ```bash
 chmod +x hawktui-*
 ./hawktui-*
 ```
+
+On Debian/Ubuntu, install the `.deb` instead — it puts `hawktui` on your `PATH` and adds a desktop launcher with icon:
+
+```bash
+sudo apt install ./hawktui_*_amd64.deb   # or: sudo dpkg -i hawktui_*_amd64.deb
+```
+
+To build the `.deb` yourself: `make deb` (or `python3 packaging/build_deb.py`), which wraps the standalone binary — output lands in `dist/`.
 - **These binaries don't bundle yt-dlp or ffmpeg.** They're still required at runtime. See the install steps above. On Linux you also need `xclip` or `xsel` for clipboard watching.
 - **The binaries are unsigned.** Windows SmartScreen may flag it (More info - Run anyway). Signing costs money; this does not.
 

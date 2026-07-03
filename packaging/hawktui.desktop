@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=HawkTUI
+GenericName=Download Manager
+Comment=Clipboard-watching yt-dlp frontend
+Exec=hawktui
+Icon=hawktui
+Terminal=true
+Categories=Network;FileTransfer;AudioVideo;Utility;
+Keywords=yt-dlp;download;clipboard;video;audio;youtube;
+StartupNotify=false
