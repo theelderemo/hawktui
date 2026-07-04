@@ -3,6 +3,8 @@
   <img src="assets/hawktui.svg" alt="hawktui" width="240"/>
 </div> 
 
+[![Help Wanted](https://shieldcn.dev/badge/help%20wanted-issue%20%231-red.svg?variant=destructive)](https://github.com/theelderemo/hawktui/issues/1)
+
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/last-commit/theelderemo/hawktui.svg?variant=secondary&amp;size=sm&amp;mode=dark"><img alt="Last commit" src="https://www.shieldcn.dev/github/last-commit/theelderemo/hawktui.svg?variant=secondary&amp;size=sm&amp;mode=light"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/release/theelderemo/hawktui.svg?size=sm&amp;mode=dark"><img alt="Release" src="https://www.shieldcn.dev/github/release/theelderemo/hawktui.svg?size=sm&amp;mode=light"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/ci/theelderemo/hawktui.svg?variant=secondary&amp;size=sm&amp;mode=dark"><img alt="CI" src="https://www.shieldcn.dev/github/ci/theelderemo/hawktui.svg?variant=secondary&amp;size=sm&amp;mode=light"></picture>
