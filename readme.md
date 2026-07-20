@@ -7,13 +7,6 @@
 <p>&nbsp;</p>
 <p></p>  
 
-<a href="https://github.com/theelderemo/hawktui/issues/1">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/badge/help%20wanted-issue%20%231-red.svg?variant=destructive&size=lg&mode=dark">
-    <img alt="Help Wanted - Issue #1" src="https://www.shieldcn.dev/badge/help%20wanted-issue%20%231-red.svg?variant=destructive&size=default&mode=light">
-  </picture>
-</a>    
-
 <p></p>
 <p>&nbsp;</p>
 <p></p>  
