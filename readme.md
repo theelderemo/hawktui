@@ -73,8 +73,9 @@ HawkTUI is the one that actually **spits on that thang**.
 - **Gorgeous themes** - Nord, Catppuccin Mocha, Tokyo Night, Gruvbox (the default, to match the hawk), Dracula, and more. Looks slutty in the best way for the r/unixporn screenshot.
 
 ## Installation
-
 HawkTUI likes it when your environment is properly set up. yt-dlp is mandatory, don't be a clown [yt-dlp repo](https://github.com/yt-dlp/yt-dlp#installation)
+
+On first run HawkTUI offers to fetch the official standalone build into `~/.local/share/hawktui/` and keeps it fresh with daily self-updates (press `u` to force one). Already have one in `~/.local/bin` or on `PATH`? It'll use that instead. You can also point it at any binary in Settings.
 
 ```bash
 # Clone the repo
@@ -123,7 +124,6 @@ Prebuilt binaries for Linux and Windows are attached to every [release](https://
 | Platform | Asset |
 | :--- | :--- |
 | Linux (x86_64) | `hawktui-linux-x86_64` |
-| Debian / Ubuntu (x86_64) | `hawktui_<version>_amd64.deb` |
 | Windows (x86_64) | `hawktui-windows-x86_64.exe` |
 
 On Linux, make the raw binary executable and run it:
@@ -133,15 +133,9 @@ chmod +x hawktui-*
 ./hawktui-*
 ```
 
-On Debian/Ubuntu, install the `.deb` instead — it puts `hawktui` on your `PATH` and adds a desktop launcher with icon:
-
-```bash
-sudo apt install ./hawktui_*_amd64.deb   # or: sudo dpkg -i hawktui_*_amd64.deb
-```
-
-To build the `.deb` yourself: `make deb` (or `python3 packaging/build_deb.py`), which wraps the standalone binary — output lands in `dist/`.
-- **These binaries don't bundle yt-dlp or ffmpeg.** They're still required at runtime. See the install steps above. On Linux you also need `xclip` or `xsel` for clipboard watching.
-- **The binaries are unsigned.** Windows SmartScreen may flag it (More info - Run anyway). Signing costs money; this does not.
+- **These binaries don't bundle yt-dlp or ffmpeg.** No yt-dlp? HawkTUI offers to download and self-manage the official one on first run. ffmpeg you still need yourself (merging and post-processing won't work without it). On Linux you also need `xclip` or `xsel` for clipboard watching.
+- **The binaries are unsigned.** 
+Windows SmartScreen will scream and cry that this binary is 'unrecognized.' Smother it with a pillow, click 'More info', and rawdog that 'Run Anyway' button. 
 
 ### macOS users
 
@@ -152,9 +146,9 @@ cd hawktui
 python3 hawktui/build.py
 ```
 
-This spins up a throwaway virtual environment, builds a standalone `hawktui` with PyInstaller, and drops it into `~/.local/bin` so you can call `hawktui` from anywhere. If `~/.local/bin` isn't on your `PATH`, the script tells you exactly what to add. macOS Gatekeeper won't complain since you built it yourself.
+This spins up a throwaway virtual environment, builds a standalone `hawktui` with PyInstaller, and drops it into `~/.local/bin` so you can call `hawktui` from anywhere. If `~/.local/bin` isn't on your `PATH`, the script tells you exactly what to add.  
 
-Still need yt-dlp and ffmpeg installed at runtime (`brew install yt-dlp ffmpeg`).
+macOS Gatekeeper won't complain because you lubricated the build process with your own local spit.
 
 ## Usage
 
@@ -164,7 +158,7 @@ Once you are deep inside the TUI, use these keys to control the rhythm:
 
 | Key | What it does |
 | :--- | :--- |
-| `w` | Toggle clipboard watching |
+| `w` | Toggle the voyeur. Make it watch your clipboard. |
 | `a` | For when you just want to shove a link in yourself. |
 | `f` | Voyeuristically list formats (`-F`) for the current URL |
 | `c` | Wipes off the mess once downloads are finished |
@@ -174,8 +168,9 @@ Once you are deep inside the TUI, use these keys to control the rhythm:
 | `d` | Remove the selected row entirely (spits it out first if it's still going) |
 | `y` | Yank the selected URL back onto your clipboard |
 | `b` | Open the selected URL in your browser |
-| `Enter` | Open the finished file, or its folder if we don't know the exact path yet |
-| `o` | Open your downloads folder |
+| `Enter` | Crack open the finished load (or its folder, if we're still groping around for the exact path). |
+| `o` | Open your downloads folder to gaze upon your filthy, aggregated hoard |
+| `u` | Sharpen the talons — update the managed yt-dlp right now |
 | `Ctrl+P` | Command palette (for the fancy ones) |
 | `q` | Pull out and exit (saves your config like a good girl) |
 
@@ -186,6 +181,7 @@ Everything lives in `~/.config/hawktui/config.toml`.
 You can tweak almost every yt-dlp flag from inside the app under the **Settings** tab:
 
 - Download directory
+- yt-dlp binary path (blank = auto: managed download, `~/.local/bin`, then `PATH`)
 - Output template
 - Format selector
 - Max parallel downloads

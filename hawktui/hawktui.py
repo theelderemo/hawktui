@@ -6,6 +6,7 @@ __version__ = "1.2.1"
 
 import json
 import os
+import platform
 import queue
 import re
 import shutil
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from dataclasses import dataclass, field
 from itertools import count
@@ -54,6 +56,33 @@ from textual.widgets import (
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "hawktui"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 QUEUE_STATE_PATH = CONFIG_DIR / "queue.json"
+
+DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "hawktui"
+YTDLP_MANAGED = DATA_DIR / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+NO_FETCH_MARKER = DATA_DIR / "no-fetch"
+UPDATE_STAMP = DATA_DIR / "last-update-check"
+UPDATE_INTERVAL = 24 * 3600
+
+YTDLP_ASSETS = {
+    "windows": "yt-dlp.exe",
+    "darwin": "yt-dlp_macos",
+    "linux-x86_64": "yt-dlp_linux",
+    "linux-aarch64": "yt-dlp_linux_aarch64",
+}
+
+
+def ytdlp_download_url() -> str | None:
+    system = platform.system().lower()
+    if system in ("windows", "darwin"):
+        key = system
+    else:
+        machine = platform.machine().lower()
+        machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
+        key = f"{system}-{machine}"
+    asset = YTDLP_ASSETS.get(key)
+    if asset is None:
+        return None
+    return f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}"
 
 PROG = "@@HAWK@@"
 PROGRESS_TEMPLATE = (
@@ -160,6 +189,7 @@ PARALLEL = [("1", "1"), ("2", "2"), ("3", "3"), ("4", "4"), ("6", "6"), ("8", "8
 
 DEFAULTS: dict = {
     "download_dir": str(Path.home() / "Downloads"),
+    "ytdlp_path": "",
     "output_template": "",
     "format": "",
     "max_parallel": "2",
@@ -292,11 +322,38 @@ def _subprocess_env() -> dict:
                 env[var] = orig
             else:
                 env.pop(var, None)
+    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
+    for extra in (str(Path.home() / "bin"), str(Path.home() / ".local/bin")):
+        if extra not in parts:
+            parts.insert(0, extra)
+    env["PATH"] = os.pathsep.join(parts)
     return env
 
 
-def build_command(cfg: dict, url: str) -> list[str]:
-    cmd = ["yt-dlp", "--color", "never", "--newline",
+def _resolve_ytdlp(cfg: dict) -> tuple[str, int]:
+    explicit = str(cfg.get("ytdlp_path", "")).strip()
+    if explicit:
+        return os.path.expanduser(explicit), 1
+    managed = os.path.expanduser(str(YTDLP_MANAGED))
+    if os.access(managed, os.X_OK):
+        return managed, 2
+    exe = "yt-dlp.exe" if os.name == "nt" else "yt-dlp"
+    for cand in (Path.home() / ".local/bin" / exe, Path.home() / "bin" / exe):
+        path = os.path.expanduser(str(cand))
+        if os.access(path, os.X_OK):
+            return path, 3
+    found = shutil.which("yt-dlp")
+    if found:
+        return found, 4
+    return "yt-dlp", 5
+
+
+def find_ytdlp(cfg: dict) -> str:
+    return _resolve_ytdlp(cfg)[0]
+
+
+def build_command(cfg: dict, url: str, ytdlp: str | None = None) -> list[str]:
+    cmd = [ytdlp or find_ytdlp(cfg), "--color", "never", "--newline",
            "--progress-template", PROGRESS_TEMPLATE]
 
     ddir = os.path.expanduser(cfg["download_dir"]).strip()
@@ -450,6 +507,40 @@ class ResumeScreen(ModalScreen[bool]):
         self.dismiss(event.button.id == "resume-yes")
 
 
+class FetchYtdlpScreen(ModalScreen[bool]):
+    CSS = """
+    FetchYtdlpScreen { align: center middle; }
+    #fetch-dialog {
+        grid-size: 2;
+        grid-gutter: 1 2;
+        grid-rows: 1fr 3;
+        padding: 1 2;
+        width: 60;
+        height: 11;
+        border: thick $primary;
+        background: $surface;
+    }
+    #fetch-msg { column-span: 2; height: 1fr; content-align: center middle; }
+    #fetch-dialog Button { width: 100%; }
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        yield Grid(
+            Label(self._message, id="fetch-msg"),
+            Button("Fetch", variant="primary", id="fetch-yes"),
+            Button("Skip", id="fetch-no"),
+            id="fetch-dialog",
+        )
+
+    @on(Button.Pressed)
+    def _on_button(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "fetch-yes")
+
+
 class hawktui(App):
     TITLE = "HawkTUI"
     SUB_TITLE = f"v{__version__}"
@@ -513,6 +604,7 @@ class hawktui(App):
         Binding("y", "copy_url", "Copy URL"),
         Binding("b", "open_browser", "Open in browser"),
         Binding("o", "open_downloads", "Open folder"),
+        Binding("u", "update_ytdlp", "Update yt-dlp"),
         Binding("ctrl+p", "command_palette", "Palette"),
         Binding("q", "quit", "Quit"),
     ]
@@ -583,6 +675,7 @@ class hawktui(App):
                 yield self._row("Download directory", self._in("download_dir", "~/Downloads"))
                 yield self._row("Output template (-o)", self._in("output_template", "%(title)s.%(ext)s"))
                 yield self._row("Format selector (-f)", self._in("format", "bv*+ba/b"))
+                yield self._row("yt-dlp binary (blank = auto)", self._in("ytdlp_path", "/path/to/yt-dlp"))
                 yield self._row("Parallel downloads", self._sel("max_parallel", PARALLEL))
                 yield self._row("Watch on start", self._sw("watch_on_start"))
                 yield self._row("Professional mode (SFW)", self._sw("sfw"))
@@ -639,12 +732,17 @@ class hawktui(App):
         self.update_status()
         self._dispatcher()
         self._offer_resume()
+        self._offer_fetch()
+        self._maybe_update_ytdlp()
 
     def _check_environment(self) -> None:
         if _load_warning:
             self._write_log("WARNING: " + _load_warning)
-        if shutil.which("yt-dlp") is None:
-            self._write_log("WARNING: yt-dlp not found on PATH (pip install yt-dlp).")
+        resolved, level = _resolve_ytdlp(self.cfg)
+        if level == 1 and not os.access(resolved, os.X_OK):
+            self._write_log(f"WARNING: configured yt-dlp path is not executable: {resolved}")
+        self._write_log(f"yt-dlp resolved to: {resolved}")
+        self._probe_ytdlp(resolved)
         if pyperclip is None:
             self._write_log("WARNING: pyperclip not installed; clipboard watch disabled.")
         elif sys.platform.startswith("linux") \
@@ -655,6 +753,162 @@ class hawktui(App):
             "ready. press 'w' to toggle watching, 'a' to add a URL.",
         ))
 
+    @work(thread=True, group="env-check")
+    def _probe_ytdlp(self, path: str) -> None:
+        try:
+            res = subprocess.run([path, "--version"], capture_output=True,
+                                 text=True, timeout=15, env=_subprocess_env())
+        except Exception as exc:
+            self.call_from_thread(
+                self._write_log, f"WARNING: could not run {path}: {exc}")
+            return
+        version = res.stdout.strip()
+        if res.returncode == 0 and version:
+            self.call_from_thread(self._write_log, f"yt-dlp {version} @ {path}")
+        else:
+            detail = (res.stderr or res.stdout).strip() or f"exit {res.returncode}"
+            self.call_from_thread(
+                self._write_log,
+                f"WARNING: {path} --version failed: {detail.splitlines()[0]}")
+
+    def _offer_fetch(self) -> None:
+        if NO_FETCH_MARKER.exists():
+            return
+        path, level = _resolve_ytdlp(self.cfg)
+        stale = level == 5 or (
+            level == 4 and (path.startswith("/usr/bin/") or path.startswith("/bin/")))
+        if not stale:
+            return
+        if ytdlp_download_url() is None:
+            self._write_log(
+                "WARNING: no official yt-dlp build for this platform; "
+                "managed download unavailable.")
+            return
+        msg = self._voice(
+            "your yt-dlp is fossilized (or missing). fetch the fresh official one?",
+            "no up-to-date yt-dlp found. Download the official standalone binary?",
+        )
+        self.push_screen(FetchYtdlpScreen(msg),
+                         lambda fetch: self._handle_fetch(bool(fetch)))
+
+    def _handle_fetch(self, fetch: bool) -> None:
+        if fetch:
+            self.fetch_ytdlp_worker()
+            return
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            NO_FETCH_MARKER.touch()
+        except OSError:
+            pass
+        self._write_log(self._voice(
+            "fine, keep the fossil — press 'u' anytime to change your mind.",
+            "skipped. press 'u' anytime to update or fetch yt-dlp.",
+        ))
+
+    @work(thread=True, group="ytdlp-update")
+    def fetch_ytdlp_worker(self) -> None:
+        url = ytdlp_download_url()
+        if url is None:
+            return
+        self.call_from_thread(self._write_log, self._voice(
+            "hunting fresh talons — downloading official yt-dlp...",
+            "downloading official yt-dlp binary...",
+        ))
+        tmp = YTDLP_MANAGED.with_suffix(".tmp")
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with urllib.request.urlopen(url, timeout=30) as resp, open(tmp, "wb") as fh:
+                while chunk := resp.read(1 << 16):
+                    fh.write(chunk)
+            os.chmod(tmp, 0o755)
+            tmp.replace(YTDLP_MANAGED)
+        except Exception as exc:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.call_from_thread(self._write_log, self._voice(
+                f"talon fetch flopped: {exc}",
+                f"yt-dlp download failed: {exc}",
+            ))
+            return
+        self._write_update_stamp()
+        self.call_from_thread(self._write_log, self._voice(
+            f"fresh talons fetched — yt-dlp ready at {YTDLP_MANAGED}",
+            f"yt-dlp downloaded to {YTDLP_MANAGED}",
+        ))
+
+    def _write_update_stamp(self) -> None:
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            UPDATE_STAMP.write_text(str(int(time.time())), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _ytdlp_update_running(self) -> bool:
+        return any(w.group == "ytdlp-update" and w.is_running for w in self.workers)
+
+    def _maybe_update_ytdlp(self) -> None:
+        if not os.access(str(YTDLP_MANAGED), os.X_OK):
+            return
+        try:
+            stamp = float(UPDATE_STAMP.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            stamp = 0.0
+        if time.time() - stamp < UPDATE_INTERVAL:
+            return
+        if self._ytdlp_update_running():
+            return
+        self.update_ytdlp_worker()
+
+    @work(thread=True, group="ytdlp-update")
+    def update_ytdlp_worker(self) -> None:
+        self.call_from_thread(self._write_log, self._voice(
+            "sharpening talons — checking for a fresher yt-dlp...",
+            "checking for yt-dlp updates...",
+        ))
+        try:
+            res = subprocess.run([str(YTDLP_MANAGED), "-U"], capture_output=True,
+                                 text=True, timeout=120, env=_subprocess_env())
+        except Exception as exc:
+            self.call_from_thread(self._write_log, self._voice(
+                f"talon sharpening failed: {exc}",
+                f"yt-dlp update failed: {exc}",
+            ))
+            return
+        for line in res.stdout.splitlines():
+            if line.strip():
+                self.call_from_thread(self._write_log, line)
+        if res.returncode == 0:
+            self._write_update_stamp()
+            self.call_from_thread(self._write_log, self._voice(
+                "fresh talons fetched — yt-dlp updated",
+                "yt-dlp updated",
+            ))
+        else:
+            detail = res.stderr.strip().splitlines()
+            self.call_from_thread(self._write_log, self._voice(
+                f"talon sharpening failed ({detail[0] if detail else res.returncode}).",
+                f"yt-dlp update failed ({detail[0] if detail else res.returncode}).",
+            ))
+
+    def action_update_ytdlp(self) -> None:
+        if not os.access(str(YTDLP_MANAGED), os.X_OK):
+            self._write_log(self._voice(
+                "no managed yt-dlp to sharpen — set one up in Settings or delete "
+                "~/.local/share/hawktui/no-fetch",
+                "no managed yt-dlp binary — set a path in Settings or delete "
+                "~/.local/share/hawktui/no-fetch to be offered the download again.",
+            ))
+            return
+        if self._ytdlp_update_running():
+            self._write_log(self._voice(
+                "talons already being sharpened — patience.",
+                "yt-dlp update already running.",
+            ))
+            return
+        self.update_ytdlp_worker()
+
     def update_status(self) -> None:
         ds = self.downloads.values()
         active = sum(1 for d in ds if d.status == "downloading")
@@ -662,7 +916,10 @@ class hawktui(App):
         done = sum(1 for d in ds if d.status == "done")
         failed = sum(1 for d in ds if d.status.startswith("error") or d.status == "missing")
         state = "● WATCHING" if self.watching else "○ PAUSED"
-        bar = self.query_one("#statusbar", Static)
+        try:
+            bar = self.query_one("#statusbar", Static)
+        except Exception:
+            return
         bar.set_class(self.watching, "on")
         bar.set_class(not self.watching, "off")
         qstate = "   ⏸ QUEUE PAUSED" if self._queue_paused else ""

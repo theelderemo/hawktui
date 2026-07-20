@@ -53,18 +53,6 @@ jobs:
           --collect-all pyperclip
           hawktui/hawktui.py
 
-      - name: Build .deb package
-        if: matrix.os == 'ubuntu-latest'
-        run: python packaging/build_deb.py --binary "dist/${{ matrix.binary }}"
-
-      - name: Upload .deb artifact
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: hawktui-deb
-          path: dist/*.deb
-          if-no-files-found: error
-
       - name: Rename binary to asset name
         shell: bash
         run: mv "dist/${{ matrix.binary }}" "dist/${{ matrix.asset }}"
@@ -100,14 +88,13 @@ jobs:
             attached below. Pick the one for your platform, make it executable
             (`chmod +x hawktui-*` on Linux), and run it.
 
-            **Debian / Ubuntu:** grab the `.deb` and install it with
-            `sudo apt install ./hawktui_*_amd64.deb` it adds `hawktui` to your `PATH`
-            and installs a desktop launcher with icon.
-
             > **macOS users:** there's no prebuilt binary, build from source instead.
             > It takes about a minute: `git clone` the repo and run `python3 hawktui/build.py`,
             > which packages a standalone `hawktui` into `~/.local/bin`. See the README for details.
 
             > **These binaries do NOT bundle yt-dlp or ffmpeg.**
-            > Those are still required at runtime. On Linux you also need `xclip` or `xsel`
-            > for clipboard watching. See the README for setup.
+            > On first run HawkTUI offers to download the official yt-dlp standalone
+            > binary and keeps it updated for you (press `u` to update anytime); an
+            > existing yt-dlp in `~/.local/bin` or on `PATH` works too. ffmpeg is still
+            > needed for merging/post-processing, and on Linux you also need `xclip` or
+            > `xsel` for clipboard watching. See the README for setup.
