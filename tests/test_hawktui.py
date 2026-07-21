@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 import hawktui.hawktui as ht
-from hawktui.hawktui import DEFAULTS, build_command, extract_urls, find_ytdlp
+from hawktui.hawktui import (
+    DEFAULTS, YT_403_EXTRACTOR_ARGS, build_command, extract_urls, find_ytdlp,
+)
 
 URL = "https://example.com/v"
 
@@ -77,6 +79,34 @@ def test_build_command_limit_rate():
     cmd = build_command(_cfg(limit_rate="2M"), URL, ytdlp="/x/yt-dlp")
     i = cmd.index("--limit-rate")
     assert cmd[i:i + 2] == ["--limit-rate", "2M"]
+
+
+def test_build_command_extra_args_split_before_url():
+    cmd = build_command(
+        _cfg(extra_args='--proxy socks5://127.0.0.1:1080 --cookies "~/my cookies.txt"'),
+        URL, ytdlp="/x/yt-dlp")
+    assert cmd[-6:] == ["--proxy", "socks5://127.0.0.1:1080",
+                        "--cookies", "~/my cookies.txt", "--", URL]
+
+
+def test_build_command_extra_args_wraps_403_workaround():
+    cmd = build_command(
+        _cfg(extra_args=f'--extractor-args "{YT_403_EXTRACTOR_ARGS}"'),
+        URL, ytdlp="/x/yt-dlp")
+    i = cmd.index("--extractor-args")
+    assert cmd[i:i + 2] == ["--extractor-args", YT_403_EXTRACTOR_ARGS]
+
+
+def test_build_command_no_extra_args_by_default():
+    cmd = build_command(dict(DEFAULTS), URL, ytdlp="/x/yt-dlp")
+    assert cmd[-2:] == ["--", URL]
+    assert "--extractor-args" not in cmd
+
+
+def test_build_command_malformed_extra_args_ignored():
+    cmd = build_command(_cfg(extra_args='--proxy "unclosed'), URL, ytdlp="/x/yt-dlp")
+    assert cmd[-2:] == ["--", URL]
+    assert "--proxy" not in cmd
 
 
 def test_extract_urls():

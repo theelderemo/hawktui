@@ -187,7 +187,8 @@ You can tweak almost every yt-dlp flag from inside the app under the **Settings*
 - Subtitles (write, embed, auto-generated)
 - SponsorBlock removal
 - Cookies from browser
-- Rate limits, retries, archive file, filename restrictions...
+- Extra yt-dlp args — a raw escape hatch for any flag there's no UI for (`--proxy`, `--cookies`, `--username`, `--extractor-args`, whatever). Split shell-style and appended to every download command. Bonus: if a download gets slapped with an HTTP 403, HawkTUI automatically retries it once with the YouTube player-client workaround (`youtube:player_client=default,-android_sdkless`) — unless your extra args already pass `--extractor-args`
+- Rate limits, retries, archive file, filename restrictions...etc etc etc lol.
 
 ## Contributing
 

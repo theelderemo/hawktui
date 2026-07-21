@@ -9,6 +9,7 @@ import os
 import platform
 import queue
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -90,6 +91,8 @@ PROGRESS_TEMPLATE = (
     f"\t%(progress._eta_str)s\t%(info.title)s"
 )
 BRAND_COLOR = "#b6623f"
+
+YT_403_EXTRACTOR_ARGS = "youtube:player_client=default,-android_sdkless"
 
 STATUS_VERBS = {
     "queued": "lurking",
@@ -211,6 +214,7 @@ DEFAULTS: dict = {
     "no_overwrites": False,
     "limit_rate": "",
     "retries": "",
+    "extra_args": "",
     "download_archive": False,
     "restrict_filenames": False,
     "write_subs": False,
@@ -419,6 +423,13 @@ def build_command(cfg: dict, url: str, ytdlp: str | None = None) -> list[str]:
     if cfg["cookies_from_browser"]:
         cmd += ["--cookies-from-browser", cfg["cookies_from_browser"]]
 
+    extra = str(cfg["extra_args"]).strip()
+    if extra:
+        try:
+            cmd += shlex.split(extra)
+        except ValueError:
+            pass
+
     cmd += ["--", url]
     return cmd
 
@@ -468,6 +479,8 @@ class Download:
     started_at: float = 0.0
     elapsed: float = 0.0
     filesize: int = 0
+    saw_403: bool = False
+    retried_403: bool = False
 
     def display_title(self) -> str:
         return self.title or self.url
@@ -697,6 +710,7 @@ class hawktui(App):
                 yield self._row("-w --no-overwrites", self._sw("no_overwrites"))
                 yield self._row("--limit-rate", self._in("limit_rate", "e.g. 2M"))
                 yield self._row("--retries", self._in("retries", "e.g. 10 / infinite"))
+                yield self._row("Extra yt-dlp args", self._in("extra_args", "--proxy socks5://127.0.0.1:1080 --username x"))
                 yield self._row("--download-archive", self._sw("download_archive"))
                 yield self._row("--restrict-filenames", self._sw("restrict_filenames"))
             with Collapsible(title="Subtitles"):
@@ -1018,7 +1032,14 @@ class hawktui(App):
             dl.started_at = time.monotonic()
             self.call_from_thread(self._update_row, dl)
             self.call_from_thread(self._save_queue_state)
-            cmd = build_command(self.cfg, dl.url)
+            cfg = self.cfg
+            if dl.retried_403:
+                cfg = dict(self.cfg)
+                cfg["extra_args"] = (
+                    f'{cfg["extra_args"]} '
+                    f'--extractor-args "{YT_403_EXTRACTOR_ARGS}"'
+                ).strip()
+            cmd = build_command(cfg, dl.url)
             self.call_from_thread(self._write_log, "$ " + " ".join(cmd))
             try:
                 proc = subprocess.Popen(
@@ -1046,6 +1067,8 @@ class hawktui(App):
                             dl.title = p[4].strip()
                     self.call_from_thread(self._update_row, dl)
                 elif line.strip():
+                    if "HTTP Error 403" in line:
+                        dl.saw_403 = True
                     self._capture_filepath(dl, line)
                     self.call_from_thread(self._write_log, line)
             proc.wait()
@@ -1190,6 +1213,22 @@ class hawktui(App):
             self._save_queue_state()
 
     def _on_download_finished(self, dl: Download) -> None:
+        if (dl.status.startswith("error") and dl.saw_403 and not dl.retried_403
+                and "--extractor-args" not in str(self.cfg.get("extra_args", ""))
+                and dl.id in self.downloads):
+            dl.retried_403 = True
+            dl.saw_403 = False
+            dl.status, dl.percent, dl.speed, dl.eta = "queued", "—", "—", "—"
+            self._update_row(dl)
+            self._write_log(self._voice(
+                f"403 slap from the server — trying again with a fresh player client: {dl.display_title()}",
+                f"HTTP 403 — retrying with --extractor-args \"{YT_403_EXTRACTOR_ARGS}\": {dl.display_title()}",
+            ))
+            self._announced_alldone = False
+            self._save_queue_state()
+            self.pending.put(dl)
+            return
+
         self._save_queue_state()
 
         title = dl.display_title()
