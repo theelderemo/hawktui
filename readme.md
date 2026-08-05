@@ -93,10 +93,11 @@ Too lazy to type all that? There's a `requirements.txt` that'll do the slurping 
 pip install -r hawktui/requirements.txt
 ```
 
-On Linux you'll also want `xclip` or `xsel` so the clipboard watching actually works and doesn't just edge you.
+On Linux you'll also want a clipboard helper so the watching actually works and doesn't just edge you. `wl-clipboard` on Wayland, `xclip` or `xsel` on X11. (Not sure which you're on? `echo $XDG_SESSION_TYPE` will tell you.)
 
 ```bash
-sudo apt install xclip   # or xsel
+sudo apt install wl-clipboard   # Wayland
+sudo apt install xclip          # X11 (or xsel)
 ```
 
 ### Want a standalone binary?
@@ -126,7 +127,7 @@ chmod +x hawktui-*
 ./hawktui-*
 ```
 
-- **These binaries don't bundle yt-dlp or ffmpeg.** No yt-dlp? HawkTUI offers to download and self-manage the official one on first run. ffmpeg you still need yourself (merging and post-processing won't work without it). On Linux you also need `xclip` or `xsel` for clipboard watching.
+- **These binaries don't bundle yt-dlp or ffmpeg.** No yt-dlp? HawkTUI offers to download and self-manage the official one on first run. ffmpeg you still need yourself (merging and post-processing won't work without it). On Linux you also need `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11) for clipboard watching.
 - **The binaries are unsigned.** 
 Windows SmartScreen will scream and cry that this binary is 'unrecognized.' Smother it with a pillow, click 'More info', and rawdog that 'Run Anyway' button. 
 

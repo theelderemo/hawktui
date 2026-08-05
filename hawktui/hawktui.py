@@ -759,9 +759,12 @@ class hawktui(App):
         self._probe_ytdlp(resolved)
         if pyperclip is None:
             self._write_log("WARNING: pyperclip not installed; clipboard watch disabled.")
-        elif sys.platform.startswith("linux") \
-                and shutil.which("xclip") is None and shutil.which("xsel") is None:
-            self._write_log("WARNING: install xclip or xsel for X11 clipboard access.")
+        elif sys.platform.startswith("linux"):
+            if os.environ.get("WAYLAND_DISPLAY"):
+                if shutil.which("wl-copy") is None or shutil.which("wl-paste") is None:
+                    self._write_log("WARNING: install wl-clipboard for Wayland clipboard access.")
+            elif shutil.which("xclip") is None and shutil.which("xsel") is None:
+                self._write_log("WARNING: install xclip or xsel for X11 clipboard access.")
         self._write_log(self._voice(
             "locked and loaded — 'w' to start watching, 'a' to add a URL.",
             "ready. press 'w' to toggle watching, 'a' to add a URL.",
