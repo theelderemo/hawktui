@@ -317,6 +317,31 @@ def load_queue_state() -> list[dict]:
         return []
 
 
+def _klipper_dbus_cmd() -> list[str] | None:
+    """Klipper D-Bus command prefix, or None if Klipper isn't reachable.
+
+    Preferred over pyperclip's wl-paste on Plasma Wayland: KWin 6.6 dropped
+    zwlr-data-control, so wl-clipboard <= 2.2.1 falls back to opening an
+    invisible focus-stealing window on every read, which dismisses any open
+    context menu. Reading Klipper's cache over D-Bus has no side effects.
+    """
+    if not sys.platform.startswith("linux") or not os.environ.get("WAYLAND_DISPLAY"):
+        return None
+    for exe in ("qdbus6", "qdbus"):
+        path = shutil.which(exe)
+        if path is None:
+            continue
+        cmd = [path, "org.kde.klipper", "/klipper"]
+        try:
+            res = subprocess.run(cmd + ["org.kde.klipper.klipper.getClipboardContents"],
+                                 capture_output=True, text=True, timeout=3)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if res.returncode == 0:
+            return cmd
+    return None
+
+
 def _subprocess_env() -> dict:
     env = dict(os.environ)
     if getattr(sys, "frozen", False):
@@ -627,6 +652,7 @@ class hawktui(App):
         self.cfg = load_config()
         self.watching: bool = bool(self.cfg["watch_on_start"])
         self.last_clip: str = ""
+        self.klipper_cmd: list[str] | None = _klipper_dbus_cmd()
         self.seen: set[str] = set()
         self.downloads: dict[str, Download] = {}
         self.procs: dict[str, subprocess.Popen] = {}
@@ -738,7 +764,7 @@ class hawktui(App):
         self.col_keys = table.add_columns("#", "Title", "Status", "%", "Speed", "ETA")
         self._check_environment()
         try:
-            self.last_clip = (pyperclip.paste() or "").strip() if pyperclip else ""
+            self.last_clip = self._clip_paste().strip()
         except Exception:
             self.last_clip = ""
         self.set_interval(1.0, self.poll_clipboard)
@@ -757,7 +783,9 @@ class hawktui(App):
             self._write_log(f"WARNING: configured yt-dlp path is not executable: {resolved}")
         self._write_log(f"yt-dlp resolved to: {resolved}")
         self._probe_ytdlp(resolved)
-        if pyperclip is None:
+        if self.klipper_cmd is not None:
+            self._write_log("clipboard: Klipper D-Bus backend (no wl-paste focus grabs).")
+        elif pyperclip is None:
             self._write_log("WARNING: pyperclip not installed; clipboard watch disabled.")
         elif sys.platform.startswith("linux"):
             if os.environ.get("WAYLAND_DISPLAY"):
@@ -948,11 +976,40 @@ class hawktui(App):
         watch = "● watching" if self.watching else "○ paused"
         self.sub_title = f"v{__version__} · {watch}"
 
+    def _clip_ready(self) -> bool:
+        return self.klipper_cmd is not None or pyperclip is not None
+
+    def _clip_paste(self) -> str:
+        if self.klipper_cmd is not None:
+            res = subprocess.run(
+                self.klipper_cmd + ["org.kde.klipper.klipper.getClipboardContents"],
+                capture_output=True, text=True, timeout=2)
+            if res.returncode != 0:
+                raise RuntimeError(res.stderr.strip() or "klipper D-Bus read failed")
+            out = res.stdout
+            # qdbus prints a trailing newline that is not part of the clipboard
+            return out[:-1] if out.endswith("\n") else out
+        if pyperclip is None:
+            return ""
+        return pyperclip.paste() or ""
+
+    def _clip_copy(self, text: str) -> None:
+        if self.klipper_cmd is not None:
+            res = subprocess.run(
+                self.klipper_cmd + ["org.kde.klipper.klipper.setClipboardContents", text],
+                capture_output=True, text=True, timeout=2)
+            if res.returncode != 0:
+                raise RuntimeError(res.stderr.strip() or "klipper D-Bus write failed")
+            return
+        if pyperclip is None:
+            raise RuntimeError("no clipboard backend available")
+        pyperclip.copy(text)
+
     def poll_clipboard(self) -> None:
-        if not self.watching or pyperclip is None:
+        if not self.watching or not self._clip_ready():
             return
         try:
-            text = (pyperclip.paste() or "").strip()
+            text = self._clip_paste().strip()
         except Exception:
             return
         if not text or text == self.last_clip:
@@ -1386,9 +1443,9 @@ class hawktui(App):
 
     def action_toggle_watch(self) -> None:
         self.watching = not self.watching
-        if self.watching and pyperclip is not None:
+        if self.watching and self._clip_ready():
             try:
-                self.last_clip = (pyperclip.paste() or "").strip()
+                self.last_clip = self._clip_paste().strip()
             except Exception:
                 pass
         if self.watching:
@@ -1549,11 +1606,11 @@ class hawktui(App):
         dl = self._selected_download()
         if dl is None:
             return
-        if pyperclip is None:
-            self._write_log("clipboard unavailable (pyperclip not installed).")
+        if not self._clip_ready():
+            self._write_log("clipboard unavailable (no clipboard backend).")
             return
         try:
-            pyperclip.copy(dl.url)
+            self._clip_copy(dl.url)
         except Exception as exc:
             self._write_log(f"couldn't copy: {exc}")
             return

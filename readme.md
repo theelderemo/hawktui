@@ -100,6 +100,8 @@ sudo apt install wl-clipboard   # Wayland
 sudo apt install xclip          # X11 (or xsel)
 ```
 
+KDE Plasma users get a pass: HawkTUI reads the clipboard straight from Klipper over D-Bus, so none of the above is needed and it dodges a nasty Plasma 6.6 interaction where every `wl-paste` call steals focus and closes whatever right click menu you had open.
+
 ### Want a standalone binary?
 
 If you don't want to keep a Python environment around just to get your fix, `build.py` will package the whole thing into a single executable with PyInstaller and slip it into `~/.local/bin` so you can call `hawktui` from anywhere.
@@ -127,7 +129,7 @@ chmod +x hawktui-*
 ./hawktui-*
 ```
 
-- **These binaries don't bundle yt-dlp or ffmpeg.** No yt-dlp? HawkTUI offers to download and self-manage the official one on first run. ffmpeg you still need yourself (merging and post-processing won't work without it). On Linux you also need `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11) for clipboard watching.
+- **These binaries don't bundle yt-dlp or ffmpeg.** No yt-dlp? HawkTUI offers to download and self-manage the official one on first run. ffmpeg you still need yourself (merging and post-processing won't work without it). On Linux you also need `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11) for clipboard watching — except on KDE Plasma, where Klipper is used directly.
 - **The binaries are unsigned.** 
 Windows SmartScreen will scream and cry that this binary is 'unrecognized.' Smother it with a pillow, click 'More info', and rawdog that 'Run Anyway' button. 
 
